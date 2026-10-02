@@ -1,0 +1,56 @@
+{
+  "name": "centaurai-super-advisory",
+  "productName": "半人马AI-超级参谋团",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "shell/main.mjs",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5189",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs",
+    "start": "electron .",
+    "package:mac": "npm run build && electron-builder --mac --dir"
+  },
+  "dependencies": {
+    "centaurai-wanx": "file:vendor/centaurai-wanx-0.1.0-alpha.8.tgz",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.4.1",
+    "electron": "37.10.3",
+    "electron-builder": "26.15.3",
+    "typescript": "5.8.3",
+    "vite": "6.4.1"
+  },
+  "build": {
+    "appId": "ai.centaurai.super-advisory",
+    "productName": "半人马AI-超级参谋团",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "shell/**",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "assets/advisory.icns",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null
+    }
+  }
+}
