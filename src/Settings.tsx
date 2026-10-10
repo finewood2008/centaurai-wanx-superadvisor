@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { call, type BrainstormProfile, type MarketExpert } from "./bridge";
+import AdvisorAvatar from "./AdvisorAvatar";
 
 export default function Settings({
   onClose,
@@ -145,6 +146,7 @@ export default function Settings({
                       }
                       onChange={() => toggle(expert.id)}
                     />
+                    <AdvisorAvatar model={modelFor(expert.id)} />
                     <span>
                       <b>{expert.name}</b>
                       <small>

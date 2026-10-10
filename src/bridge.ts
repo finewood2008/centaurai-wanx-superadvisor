@@ -35,9 +35,21 @@ export interface Frame {
     name?: string;
   };
 }
+export interface WanxService {
+  endpoint: string;
+  name: string;
+  version: string;
+  advertised: boolean;
+  transport: string;
+}
 interface Calls {
+  connectionInfo: () => Promise<{
+    selected: WanxService | null;
+    savedEndpoint: string | null;
+  }>;
+  discoverServices: () => Promise<{ services: WanxService[]; scope: string }>;
+  connectService: (address: string) => Promise<WanxService>;
   login: (body: {
-    url: string;
     username: string;
     password: string;
   }) => Promise<{ username: string }>;

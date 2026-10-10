@@ -1,10 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
 import { AdvisorySession } from "./session.mjs";
+import { ServiceConnection } from "./service-connection.mjs";
+import { join } from "node:path";
 const documentPath = fileURLToPath(
   new URL("../dist/index.html", import.meta.url),
 );
 let window;
+let connection;
+let changingConnection = false;
 const session = new AdvisorySession(
   (frame) => {
     if (window && !window.isDestroyed())
@@ -26,6 +30,9 @@ const session = new AdvisorySession(
   },
 );
 const methods = new Set([
+  "connectionInfo",
+  "discoverServices",
+  "connectService",
   "login",
   "logout",
   "profile",
@@ -43,6 +50,10 @@ const methods = new Set([
   "send",
 ]);
 app.whenReady().then(async () => {
+  connection = new ServiceConnection(
+    join(app.getPath("userData"), "connection.json"),
+  );
+  await connection.load();
   window = new BrowserWindow({
     width: 1440,
     height: 940,
@@ -66,15 +77,35 @@ app.whenReady().then(async () => {
       !methods.has(method)
     )
       return { ok: false, error: "无法执行这个操作。" };
+    const changesConnection = ["login", "logout", "connectService"].includes(
+      method,
+    );
+    if (changesConnection && changingConnection)
+      return { ok: false, error: "正在连接，请稍候。" };
+    if (changesConnection) changingConnection = true;
     try {
+      if (method === "connectionInfo")
+        return { ok: true, data: connection.info() };
+      if (method === "discoverServices")
+        return { ok: true, data: await connection.scan() };
+      if (method === "connectService")
+        return {
+          ok: true,
+          data: await connection.connect(args[0], () => session.logout()),
+        };
+      if (method === "login")
+        return { ok: true, data: await connection.login(args[0], session) };
       return { ok: true, data: await session[method](...args) };
     } catch (error) {
       return { ok: false, error: error.message };
+    } finally {
+      if (changesConnection) changingConnection = false;
     }
   });
   await window.loadFile(documentPath);
 });
 app.on("window-all-closed", () => {
+  connection?.close();
   void session.logout();
   app.quit();
 });

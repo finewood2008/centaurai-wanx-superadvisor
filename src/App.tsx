@@ -8,7 +8,11 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Settings from "./Settings";
+import Login from "./Login";
+import AdvisorAvatar from "./AdvisorAvatar";
+import { speakerIdentity } from "./modelIdentity";
 import { MeetingOverview, SourceCards } from "./MeetingInsights";
+import { BackgroundReview, MeetingBackground } from "./MeetingBackground";
 import { readableReferences } from "./insightContent";
 import { useSpeechPlayback } from "./useSpeechPlayback";
 import { isHuman } from "./speechPlayback";
@@ -29,7 +33,7 @@ const states = {
 };
 const phases = {
   intake: "会前沟通",
-  agenda: "议程待你确认",
+  agenda: "确认会议背景",
   deliberation: "参谋议事",
   decision: "请你判断",
   closed: "会议简报",
@@ -66,13 +70,12 @@ export default function App() {
     reveal: revealSpeech,
   } = useSpeechPlayback();
   const [sources, setSources] = useState<BrainstormSource[]>([]);
-  const [tab, setTab] = useState<"ideas" | "sources">("ideas");
+  const [tab, setTab] = useState<"ideas" | "sources">("sources");
   const [topic, setTopic] = useState("");
   const [reply, setReply] = useState("");
-  const [context, setContext] = useState(true);
-  const [url, setUrl] = useState("http://127.0.0.1:8088");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [context, setContext] = useState(false);
+  const [reviewBackground, setReviewBackground] = useState(false);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -85,6 +88,9 @@ export default function App() {
   const [hasMore, setHasMore] = useState(false);
   const feed = useRef<HTMLDivElement>(null);
   const [connected, setConnected] = useState(false);
+  useEffect(() => {
+    setReviewBackground(current?.decision?.kind === "agenda" && !active);
+  }, [current?.thread_id, current?.decision?.id, !!active]);
   const report = (error: unknown) =>
     setError(error instanceof Error ? error.message : "操作暂时未完成。");
   async function work<T>(task: () => Promise<T>) {
@@ -127,10 +133,16 @@ export default function App() {
         historyCursor.current = history.next_cursor;
         setHasMore(history.has_more);
       }
-      setSources((old) => [
-        ...old.filter((s) => !next.context.sources.some((n) => n.id === s.id)),
-        ...next.context.sources,
-      ]);
+      setSources((old) =>
+        next.context_enabled
+          ? [
+              ...old.filter(
+                (s) => !next.context.sources.some((n) => n.id === s.id),
+              ),
+              ...next.context.sources,
+            ]
+          : [],
+      );
       setSessions((old) => old.map((s) => (s.thread_id === id ? next : s)));
       if (nearBottom)
         requestAnimationFrame(
@@ -194,6 +206,13 @@ export default function App() {
     [refresh, speechToken, finishSpeech],
   );
   async function select(state: BrainstormSession) {
+    setReviewBackground(false);
+    setReply("");
+    setTab(
+      state.phase === "intake" || state.phase === "agenda"
+        ? "sources"
+        : "ideas",
+    );
     historyExtended.current = false;
     historyCursor.current = undefined;
     setHasMore(false);
@@ -231,18 +250,22 @@ export default function App() {
       );
     });
   }
-  async function login(event: FormEvent) {
-    event.preventDefault();
-    await work(async () => {
-      const result = await call("login", { url, username, password });
-      setPassword("");
-      const [p, list] = await Promise.all([call("profile"), call("list")]);
-      setUser(result.username);
-      setProfile(p);
-      setSessions(list);
-      if (!p.team_id) setSettings(true);
-      else if (list[0]) await select(list[0]);
-    });
+  async function login(credentials: { username: string; password: string }) {
+    const result = await call("login", credentials);
+    let p: BrainstormProfile;
+    let list: BrainstormSession[];
+    try {
+      [p, list] = await Promise.all([call("profile"), call("list")]);
+    } catch (error) {
+      await call("logout");
+      throw error;
+    }
+    setError("");
+    setUser(result.username);
+    setProfile(p);
+    setSessions(list);
+    if (!p.team_id) setSettings(true);
+    else if (list[0]) await work(() => select(list[0]));
   }
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -254,6 +277,7 @@ export default function App() {
         expert_ids: expertIds,
       });
       setSessions((old) => [state, ...old]);
+      setContext(false);
       setTopic("");
       await select(state);
     });
@@ -272,7 +296,7 @@ export default function App() {
   }
   async function respond(body: BrainstormControl) {
     if (!current) return;
-    await work(async () => {
+    return work(async () => {
       const option =
         body.option_index !== undefined
           ? current.decision?.options[body.option_index]
@@ -295,6 +319,7 @@ export default function App() {
       );
       if (text) humanSpeech(text);
       setReply("");
+      return next;
     });
   }
   async function viewReport() {
@@ -327,19 +352,32 @@ export default function App() {
         if (index >= 0) excluded.splice(index, 1);
         else excluded.push(id);
       }
-      const next = await call("control", current.thread_id, {
+      let next = await call("control", current.thread_id, {
         action: "sources",
+        revision: current.revision,
         excluded_source_ids: excluded,
         context_enabled: id
           ? current.context_enabled
           : !current.context_enabled,
       });
+      if (current.phase === "agenda") {
+        next = await call("control", current.thread_id, {
+          action: "agenda",
+          revision: next.revision,
+        });
+      }
       currentRef.current = next;
       setCurrent(next);
-      setSources((old) => [
-        ...old.filter((s) => !next.context.sources.some((n) => n.id === s.id)),
-        ...next.context.sources,
-      ]);
+      setSources((old) =>
+        next.context_enabled
+          ? [
+              ...old.filter(
+                (s) => !next.context.sources.some((n) => n.id === s.id),
+              ),
+              ...next.context.sources,
+            ]
+          : [],
+      );
     });
   }
   async function send(event: FormEvent) {
@@ -351,89 +389,7 @@ export default function App() {
       ...(current.decision ? { decision_id: current.decision.id } : {}),
     });
   }
-  function nameOf(id?: string) {
-    return !id || id === profile?.team_id
-      ? "主持人"
-      : current?.participants?.find((m) => m.agent_id === id)?.name ??
-          profile?.members.find((m) => m.agent_id === id)?.name ??
-          "参谋";
-  }
-  if (!user)
-    return (
-      <div className="login-page">
-        <div className="login-story">
-          <span className="wordmark">
-            <img src={brandMark} alt="半人马AI" />
-            CENTAUR AI <i>／</i> SUPER ADVISORY
-          </span>
-          <div>
-            <span className="eyebrow">把一个问题，打开成更多可能。</span>
-            <h1>
-              你提出问题。
-              <br />
-              参谋团一起
-              <br />
-              <em>拓展边界。</em>
-            </h1>
-            <p>
-              多种模型，多种视角。让主持人持续追问，
-              <br />
-              让知君的个人上下文成为讨论的起点。
-            </p>
-          </div>
-          <small>半人马AI-超级参谋团 · 0.1</small>
-        </div>
-        <div className="login-form">
-          <span className="eyebrow">开始一场有深度的头脑风暴</span>
-          <h2>和你的参谋团见面</h2>
-          <p>使用与知君相同的 WANX 账号。</p>
-          <form onSubmit={login}>
-            <label>
-              WANX 服务地址
-              <input
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                type="url"
-                required
-                placeholder="https://你的万象服务地址"
-              />
-            </label>
-            <label>
-              账号
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-                required
-              />
-            </label>
-            <label>
-              密码
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </label>
-            {error && (
-              <div className="error" role="alert">
-                {error}
-              </div>
-            )}
-            <button className="primary" disabled={busy}>
-              {busy ? "正在连接…" : "进入超级参谋团 →"}
-            </button>
-          </form>
-          <small>
-            你的讨论和个人资料属于当前账号。
-            <br />
-            服务需先启用「超级参谋团」应用并授权这个账号。
-          </small>
-        </div>
-      </div>
-    );
+  if (!user) return <Login onLogin={login} />;
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -451,6 +407,9 @@ export default function App() {
             setCurrent(undefined);
             currentRef.current = undefined;
             setError("");
+            setContext(false);
+            setReply("");
+            setTab("sources");
           }}
         >
           ＋ 发起新讨论
@@ -536,9 +495,9 @@ export default function App() {
               值得一起<em>想得更远？</em>
             </h1>
             <p>
-              主持人先跟你确认目标，再组织参谋议事、提炼观点。
+              不需要知君，也不需要先填个人档案。
               <br />
-              你可以安心旁听、随时发言，最后由你裁决。
+              主持人先跟你聊清目标与条件，整理成会议背景，等你确认后再开会。
             </p>
             <form onSubmit={create}>
               <textarea
@@ -555,7 +514,7 @@ export default function App() {
                     checked={context}
                     onChange={(e) => setContext(e.target.checked)}
                   />
-                  结合我的知君资料
+                  从知君补充资料（可选）
                 </label>
                 <button
                   className="primary"
@@ -569,6 +528,11 @@ export default function App() {
                   {busy ? "正在准备…" : "先与主持人聊聊 →"}
                 </button>
               </div>
+              <p className="new-context-note">
+                {context
+                  ? "你已选择允许本场按主题检索同一账号的知君资料，结果和出处会列在会议背景中，可随时排除。"
+                  : "默认只使用你在本场提供的信息。没有知君也能直接开始。"}
+              </p>
             </form>
             {profile?.members.length ? (
               <fieldset className="meeting-roster">
@@ -594,8 +558,10 @@ export default function App() {
                           )
                         }
                       />
+                      <AdvisorAvatar model={member.model} />
                       <span>
                         <b>{member.name}</b>
+                        <small>{member.model || "模型未注明"}</small>
                         <p>{member.description}</p>
                       </span>
                     </label>
@@ -614,7 +580,8 @@ export default function App() {
               <div>
                 <h1>{current.title}</h1>
                 <p className="participants-line">
-                  参会：{current.participants?.map((m) => m.name).join(" · ")}
+                  {current.agenda_confirmed ? "参会：" : "待你确认后入席："}
+                  {current.participants?.map((m) => m.name).join(" · ")}
                 </p>
               </div>
               {current.agenda && (
@@ -675,6 +642,32 @@ export default function App() {
                 )}
               </div>
             </div>
+            <nav className="meeting-steps" aria-label="会议进度">
+              <span
+                aria-current={current.phase === "intake" ? "step" : undefined}
+              >
+                01 聊清问题
+              </span>
+              <span
+                aria-current={current.phase === "agenda" ? "step" : undefined}
+              >
+                02 确认会议背景
+              </span>
+              <span
+                aria-current={
+                  current.agenda_confirmed && current.status !== "ended"
+                    ? "step"
+                    : undefined
+                }
+              >
+                03 参谋议事
+              </span>
+              <span
+                aria-current={current.status === "ended" ? "step" : undefined}
+              >
+                04 裁决与报告
+              </span>
+            </nav>
             <div className="feed" ref={feed}>
               {showReport && current.report ? (
                 <article className="meeting-report">
@@ -691,57 +684,64 @@ export default function App() {
                       查看更早的讨论
                     </button>
                   )}
-                  {entries.map((speech) => (
-                    <article
-                      className={
-                        isHuman(speech) ? "message user-message" : "message"
-                      }
-                      key={speech.key}
-                      data-speaking={active?.key === speech.key || undefined}
-                    >
-                      <div className="speaker">
-                        <span
-                          className={
-                            isHuman(speech) ? "user-symbol" : "speaker-symbol"
-                          }
-                        >
-                          {isHuman(speech)
-                            ? "你"
-                            : speech.agent_id === profile?.team_id
-                            ? "◈"
-                            : "✦"}
-                        </span>
-                        <b>
-                          {isHuman(speech) ? user : nameOf(speech.agent_id)}
-                        </b>
-                        {active?.key === speech.key ? (
-                          <small>正在发言</small>
-                        ) : (
-                          speech.agent_id === profile?.team_id && (
-                            <small>主持 · 引导与提炼</small>
+                  {entries.map((speech) => {
+                    const identity = speakerIdentity(
+                      speech.agent_id,
+                      current,
+                      profile,
+                    );
+                    return (
+                      <article
+                        className={
+                          isHuman(speech) ? "message user-message" : "message"
+                        }
+                        key={speech.key}
+                        data-speaking={active?.key === speech.key || undefined}
+                      >
+                        <div className="speaker">
+                          {isHuman(speech) ? (
+                            <span className="user-symbol">你</span>
+                          ) : (
+                            <AdvisorAvatar
+                              model={identity.model}
+                              moderator={identity.moderator}
+                            />
+                          )}
+                          <div className="speaker-identity">
+                            <b>{isHuman(speech) ? user : identity.name}</b>
+                            {!isHuman(speech) && (
+                              <span className="speaker-model">
+                                {identity.moderator
+                                  ? "会议秘书 · 主持与提炼"
+                                  : identity.model || "模型未注明"}
+                              </span>
+                            )}
+                          </div>
+                          {active?.key === speech.key ? (
+                            <small>正在发言</small>
+                          ) : null}
+                          {active?.key === speech.key && !speech.instant && (
+                            <button
+                              className="speech-reveal"
+                              onClick={revealSpeech}
+                            >
+                              显示本条全文
+                            </button>
+                          )}
+                        </div>
+                        <Markdown
+                          text={Array.from(
+                            readableReferences(speech.text, sources),
                           )
+                            .slice(0, speech.shown)
+                            .join("")}
+                        />
+                        {active?.key === speech.key && (
+                          <span className="typing-caret" aria-hidden="true" />
                         )}
-                        {active?.key === speech.key && !speech.instant && (
-                          <button
-                            className="speech-reveal"
-                            onClick={revealSpeech}
-                          >
-                            显示本条全文
-                          </button>
-                        )}
-                      </div>
-                      <Markdown
-                        text={Array.from(
-                          readableReferences(speech.text, sources),
-                        )
-                          .slice(0, speech.shown)
-                          .join("")}
-                      />
-                      {active?.key === speech.key && (
-                        <span className="typing-caret" aria-hidden="true" />
-                      )}
-                    </article>
-                  ))}
+                      </article>
+                    );
+                  })}
                   {entries.length === 0 && (
                     <div className="feed-empty">
                       主持人正在了解主题，准备邀请参谋。
@@ -802,6 +802,8 @@ export default function App() {
                     setCurrent(undefined);
                     currentRef.current = undefined;
                     setError("");
+                    setContext(false);
+                    setTab("sources");
                   }}
                 >
                   发起新讨论 →
@@ -815,7 +817,7 @@ export default function App() {
                       {current.decision.kind === "intake"
                         ? "先了解你的想法"
                         : current.decision.kind === "agenda"
-                        ? "请确认会议议程"
+                        ? "会议背景已整理好"
                         : current.decision.kind === "verdict"
                         ? "请你裁决"
                         : "这件事需要你的判断"}
@@ -823,33 +825,26 @@ export default function App() {
                     <p>{current.decision.question}</p>
                     {current.decision.kind === "agenda" ? (
                       <>
-                        <p className="agenda-preview">
-                          {current.brief || current.agenda}
+                        <p className="quiet">
+                          请先核对目标、条件和讨论范围。你确认后，参谋才开始议事。
                         </p>
                         <div className="decision-options agenda-options">
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() =>
-                              void respond({
-                                action: "start",
-                                decision_id: current.decision!.id,
-                              })
-                            }
+                            onClick={() => setReviewBackground(true)}
                           >
-                            按这个议程开始 →
+                            查看并确认会议背景 →
                           </button>
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() =>
-                              void respond({
-                                action: "revise",
-                                decision_id: current.decision!.id,
-                              })
-                            }
+                            onClick={() => {
+                              setTab("sources");
+                              composerInput.current?.focus();
+                            }}
                           >
-                            调整讨论重点
+                            我想再补充
                           </button>
                         </div>
                       </>
@@ -877,6 +872,7 @@ export default function App() {
                   </div>
                 )}
                 <textarea
+                  ref={composerInput}
                   value={reply}
                   onChange={(e) => setReply(e.target.value)}
                   maxLength={12000}
@@ -900,7 +896,7 @@ export default function App() {
                       disabled={busy}
                       onClick={() => void respond({ action: "agenda" })}
                     >
-                      按现有信息准备议程
+                      信息够了，整理会议背景
                     </button>
                   )}
                   {current.decision?.kind === "verdict" &&
@@ -933,8 +929,12 @@ export default function App() {
       </main>
       <aside className="insights">
         <div className="insight-title">
-          <span className="eyebrow">不断积累，逐渐清晰</span>
-          <h2>探索成果</h2>
+          <span className="eyebrow">
+            {current?.agenda_confirmed
+              ? "不断积累，逐渐清晰"
+              : "先了解你，再一起研究"}
+          </span>
+          <h2>{current?.agenda_confirmed ? "探索成果" : "会议准备"}</h2>
         </div>
         <div className="tabs">
           <button
@@ -947,57 +947,126 @@ export default function App() {
             className={tab === "sources" ? "active" : ""}
             onClick={() => setTab("sources")}
           >
-            知君资料 {sources.length > 0 && <small>{sources.length}</small>}
+            会议背景
           </button>
         </div>
-        <div className="insight-content">
+        <div className="insight-content" key={tab}>
           {tab === "ideas" ? (
             <MeetingOverview session={current} sources={sources} />
           ) : (
             <>
-              <label className="check context-toggle">
-                <input
-                  type="checkbox"
-                  checked={current?.context_enabled ?? context}
-                  disabled={!current || busy || current.status === "ended"}
-                  onChange={() => void sourceChange()}
-                />
-                使用我的知君资料
-              </label>
-              <p className="quiet">
-                按话题检索当前账号的资料。修改引用会暂停讨论，继续后使用新的资料范围。
-              </p>
-              {current?.context.notices.map((n, i) => (
-                <p className="source-notice" key={i}>
-                  {n}
-                </p>
-              ))}
-              <SourceCards
-                sources={sources}
-                excluded={current?.excluded_source_ids ?? []}
-                disabled={busy || current?.status === "ended"}
-                onChange={(id) => void sourceChange(id)}
-              />
-              {current?.excluded_source_ids
-                .filter((id) => !sources.some((s) => s.id === id))
-                .map((id, index) => (
-                  <button
-                    className="restore"
-                    disabled={busy || current.status === "ended"}
-                    key={id}
-                    onClick={() => void sourceChange(id)}
-                  >
-                    恢复已排除的资料 {index + 1}
-                  </button>
-                ))}
-              {sources.length === 0 && (
-                <p className="quiet">检索到的相关来源会列在这里。</p>
+              <MeetingBackground session={current} />
+              {current && current.status !== "ended" && (
+                <button
+                  className="background-adjust"
+                  disabled={busy}
+                  onClick={() => {
+                    if (current.decision?.kind === "agenda")
+                      setReviewBackground(true);
+                    else if (current.agenda_confirmed)
+                      void respond({ action: "revise" });
+                    else composerInput.current?.focus();
+                  }}
+                >
+                  {current.agenda_confirmed
+                    ? "重新沟通 / 调整背景"
+                    : "补充或更正背景"}
+                </button>
+              )}
+              {current && (
+                <section className="optional-context" aria-label="可选资料来源">
+                  <h3>补充来源 · 知君（可选）</h3>
+                  <label className="check context-toggle">
+                    <input
+                      type="checkbox"
+                      checked={current?.context_enabled ?? context}
+                      disabled={!current || busy || current.status === "ended"}
+                      onChange={() => void sourceChange()}
+                    />
+                    允许本场检索我的知君资料
+                  </label>
+                  <p className="quiet">
+                    默认不读取。启用后按主题检索同一账号的资料，你可以查看内容、出处并排除。没有知君也能继续会议。
+                  </p>
+                  {current?.context_enabled && (
+                    <p className="quiet">
+                      修改来源会暂停讨论；关闭后停止后续检索与引用，已有对话记录会保留。
+                    </p>
+                  )}
+                  {current?.context.notices.map((n, i) => (
+                    <p className="source-notice" key={i}>
+                      {n}
+                    </p>
+                  ))}
+                  {current?.context_enabled && (
+                    <SourceCards
+                      sources={sources}
+                      excluded={current?.excluded_source_ids ?? []}
+                      disabled={busy || current?.status === "ended"}
+                      onChange={(id) => void sourceChange(id)}
+                    />
+                  )}
+                  {current?.context_enabled &&
+                    current?.excluded_source_ids
+                      .filter((id) => !sources.some((s) => s.id === id))
+                      .map((id, index) => (
+                        <button
+                          className="restore"
+                          disabled={busy || current.status === "ended"}
+                          key={id}
+                          onClick={() => void sourceChange(id)}
+                        >
+                          恢复已排除的资料 {index + 1}
+                        </button>
+                      ))}
+                  {current?.context_enabled && sources.length === 0 && (
+                    <p className="quiet">
+                      本次没有可引用的知君资料。直接告诉主持人相关背景即可。
+                    </p>
+                  )}
+                </section>
               )}
             </>
           )}
         </div>
-        <div className="insight-footer">知君的上下文，让参谋更了解你。</div>
+        <div className="insight-footer">
+          围绕你确认的背景，为你的问题出主意。
+        </div>
       </aside>
+      {reviewBackground && current?.decision?.kind === "agenda" && !active && (
+        <BackgroundReview
+          key={current.decision.id}
+          session={current}
+          busy={busy}
+          error={error}
+          onClose={() => setReviewBackground(false)}
+          onConfirm={() =>
+            void respond({
+              action: "start",
+              decision_id: current.decision!.id,
+            }).then((next) => {
+              if (next) {
+                setReviewBackground(false);
+                setTab("ideas");
+              }
+            })
+          }
+          onCorrect={(text) =>
+            void respond({
+              action: "respond",
+              text,
+              decision_id: current.decision!.id,
+            }).then((next) => {
+              if (next) setReviewBackground(false);
+            })
+          }
+          onSources={() => {
+            setReviewBackground(false);
+            setTab("sources");
+            composerInput.current?.focus();
+          }}
+        />
+      )}
       {settings && (
         <Settings onClose={() => setSettings(false)} onSaved={setProfile} />
       )}
