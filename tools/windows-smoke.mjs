@@ -54,10 +54,10 @@ try {
       awaitPromise: true, returnByValue: true,
     });
     state = result.result.value;
-    if (state?.text.includes('把难题放上桌') && state.images.length >= 2 && state.images.every(i => i.loaded)) break;
+    if (state?.text?.includes('把难题放上桌') && state.images.length >= 2 && state.images.every(i => i.loaded)) break;
     await delay(500);
   }
-  assert.ok(state?.text.includes('把难题放上桌'), 'Launch page did not render');
+  assert.ok(state?.text?.includes('把难题放上桌'), 'Launch page did not render');
   assert.ok(state.images.length >= 2 && state.images.every(i => i.loaded), 'Artwork did not load');
   assert.equal(state.connection.selected, null, 'Isolated profile should have no selected service');
   const screenshot = await send('Page.captureScreenshot', { format: 'png' });
