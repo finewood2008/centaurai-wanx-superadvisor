@@ -4,6 +4,7 @@ import {
   operationRegistry,
 } from "centaurai-wanx";
 import { writeFile } from "node:fs/promises";
+import { lanOrigin } from "./vendor/wanx-discovery.mjs";
 const APPLICATION_ID = "super-advisory";
 const operations = [
   "login_api_auth_login_post",
@@ -41,10 +42,12 @@ export class AdvisorySession {
     this.chooseReportPath = chooseReportPath;
   }
   async login({ url, username, password }) {
+    const endpoint = lanOrigin(url);
     await this.logout();
     this.#client = createCentaurAIWanxClient({
       transport: createHTTPTransport({
-        baseURL: url,
+        baseURL: endpoint,
+        allowPrivateNetworkHTTP: true,
         token: async () => this.#token,
       }),
       policy,

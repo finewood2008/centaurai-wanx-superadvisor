@@ -1,15 +1,17 @@
 // Verify the installed executable, renderer assets and sandboxed IPC on a Windows runner.
-// No account, credentials or model requests are involved.
+// Synthetic credentials only; no real accounts or model requests are involved.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { startWanxFixture } from './wanx-smoke-fixture.mjs';
 
 assert.equal(process.platform, 'win32');
 const profile = await mkdtemp(join(tmpdir(), 'advisory-smoke-'));
 const port = 19227;
+const fixture = await startWanxFixture();
 const app = spawn(process.argv[2], [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`], { stdio: 'inherit' });
 let socket;
 try {
@@ -60,9 +62,32 @@ try {
   assert.equal(state.connection.selected, null, 'Isolated profile should have no selected service');
   const screenshot = await send('Page.captureScreenshot', { format: 'png' });
   await writeFile('release/windows-startup.png', Buffer.from(screenshot.data, 'base64'));
-  await writeFile('release/windows-startup.json', JSON.stringify({ installedExecutable: true, launchPage: true, artwork: true, sandboxedIPC: true, realBackend: false }, null, 2));
-  console.log('Installed Windows application: launch page, artwork and sandboxed IPC verified.');
+  const loginCheck = await send('Runtime.evaluate', {
+    expression: `(async () => {
+      const selected = await window.advisory.call('connectService', ${JSON.stringify(fixture.endpoint)});
+      let wrongPasswordRejected = false;
+      try { await window.advisory.call('login', { username: 'fixture', password: 'wrong' }); }
+      catch (error) { wrongPasswordRejected = error.message.includes('账号或密码不正确'); }
+      const user = await window.advisory.call('login', { username: 'fixture', password: 'synthetic-only' });
+      const profile = await window.advisory.call('profile');
+      const framePromise = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { unsubscribe(); reject(new Error('No socket frame')); }, 5000);
+        const unsubscribe = window.advisory.onFrame(frame => { clearTimeout(timer); unsubscribe(); resolve(frame); });
+      });
+      await window.advisory.call('watch', profile.team_id, 'fixture-room');
+      const frame = await framePromise;
+      await window.advisory.call('logout');
+      return { endpoint: selected.endpoint, wrongPasswordRejected, username: user.username, content: frame.frame.content };
+    })()`,
+    awaitPromise: true, returnByValue: true,
+  });
+  assert.ok(!loginCheck.exceptionDetails, JSON.stringify(loginCheck.exceptionDetails));
+  assert.deepEqual(loginCheck.result.value, { endpoint: fixture.endpoint, wrongPasswordRejected: true, username: '测试用户', content: '局域网实时连接已验证' });
+  assert.ok(fixture.authenticatedSocket());
+  await writeFile('release/windows-startup.json', JSON.stringify({ installedExecutable: true, launchPage: true, artwork: true, sandboxedIPC: true, privateNetworkHTTPLogin: true, wrongPasswordRejected: true, authenticatedWebSocket: true, syntheticWanxFixture: true, realBackend: false }, null, 2));
+  console.log('Installed Windows application: private-network login, wrong-password handling and authenticated WebSocket verified.');
 } finally {
   socket?.close();
   app.kill();
+  await fixture.close();
 }

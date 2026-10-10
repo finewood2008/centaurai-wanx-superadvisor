@@ -4,11 +4,11 @@
 
 ## Windows 安装
 
-从 [GitHub Releases](https://github.com/finewood2008/centaurai-wanx-superadvisor/releases) 下载 `Super-Advisory-Setup-0.2.0-x64.exe`，适用于 Windows 10/11 x64。安装向导可选择目录，并创建桌面和开始菜单快捷方式。安装包当前未进行代码签名，Windows 可能显示发布者未知。
+从 [GitHub Releases](https://github.com/finewood2008/centaurai-wanx-superadvisor/releases) 下载 `Super-Advisory-Setup-0.2.1-x64.exe`，适用于 Windows 10/11 x64。安装向导可选择目录，并创建桌面和开始菜单快捷方式。安装包当前未进行代码签名，Windows 可能显示发布者未知。
 
 客户端不包含 WANX 后端。在另一台电脑上运行客户端时，应连接后端的局域网地址；`127.0.0.1` 只指向运行客户端的这台电脑。
 
-在 Windows 上从源码构建：`npm ci` → `npm test` → `npm run package:win`，安装包输出到 `release/`。GitHub Actions 使用原生 Windows 环境构建，并验证静默安装、启动页面、插图加载和主进程通信；不代表真实 WANX 登录或模型讨论已经验收。
+在 Windows 上从源码构建：`npm ci` → `npm test` → `npm run package:win`，安装包输出到 `release/`。GitHub Actions 使用原生 Windows 环境构建，并验证静默安装、启动页面、插图加载、主进程通信，以及局域网模拟服务的登录和实时连接；不代表真实 WANX 登录或模型讨论已经验收。
 
 ## 本地运行
 
